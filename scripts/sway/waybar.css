@@ -1,0 +1,58 @@
+* {
+  font-family: "RobotoMono Nerd Font", monospace;
+  font-size: 13px;
+}
+window#waybar {
+  background: rgba(5, 5, 15, 0.92);
+  border-bottom: 1px solid #00FFFF;
+  color: #00FFFF;
+}
+#workspaces button {
+  color: #444466;
+  border-bottom: 2px solid transparent;
+}
+#workspaces button.focused {
+  color: #00FFFF;
+  border-bottom: 2px solid #00FFFF;
+}
+#clock, #battery, #cpu, #memory, #network {
+  color: #00FF88;
+  padding: 0 12px;
+  border-left: 1px solid #1A1A3A;
+}
+#battery.critical {
+  color: #FF00FF;
+  animation: blink 1s infinite;
+}
+@keyframes blink {
+  to { color: #FF4488; }
+}
+* {
+  font-family: "RobotoMono Nerd Font", monospace;
+  font-size: 13px;
+}
+window#waybar {
+  background: rgba(5, 5, 15, 0.92);
+  border-bottom: 1px solid #00FFFF;
+  color: #00FFFF;
+}
+#workspaces button {
+  color: #444466;
+  border-bottom: 2px solid transparent;
+}
+#workspaces button.focused {
+  color: #00FFFF;
+  border-bottom: 2px solid #00FFFF;
+}
+#clock, #battery, #cpu, #memory, #network {
+  color: #00FF88;
+  padding: 0 12px;
+  border-left: 1px solid #1A1A3A;
+}
+#battery.critical {
+  color: #FF00FF;
+  animation: blink 1s infinite;
+}
+@keyframes blink {
+  to { color: #FF4488; }
+}

@@ -1,0 +1,35 @@
+* {
+  font-family: "RobotoMono Nerd Font";
+  font-size: 13px;
+}
+.notification-row .notification {
+  background: #05050f;
+  border: 1px solid #00ffff;
+  border-radius: 0;
+  color: #00ffcc;
+  margin: 4px;
+}
+.notification-row .notification .summary {
+  color: #00ffff;
+  font-weight: 500;
+}
+.notification-row .notification .body {
+  color: #00ffcc;
+}
+.notification-row .notification .time {
+  color: #444466;
+}
+.notification-row .notification.critical {
+  border-color: #ff00ff;
+  color: #ff00ff;
+}
+.control-center {
+  background: #05050fee;
+  border: 1px solid #00ffff;
+  border-radius: 0;
+}
+.control-center .notification {
+  background: #0a0a1e;
+  border: 1px solid #1a1a3a;
+  border-radius: 0;
+}
