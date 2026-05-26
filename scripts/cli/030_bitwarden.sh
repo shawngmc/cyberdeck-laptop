@@ -8,4 +8,4 @@ echo '' >> ~/.bashrc
 echo '# Bitwarden Alias' >> ~/.bashrc
 echo "alias bw-unlock='export BW_SESSION=\$(bw unlock --raw)'" >> ~/.bashrc
 source ~/.bashrc
-bw-unlock
+export BW_SESSION=$(bw unlock --raw)
