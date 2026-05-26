@@ -3,11 +3,20 @@
 # Set up aerc for gmail
 brew install aerc w3m
 mkdir -pv ~/.config/aerc
-cp /home/linuxbrew/.linuxbrew/share/aerc/binds.conf ~/.config/aerc/binds.conf
-cp /home/linuxbrew/.linuxbrew/share/aerc/aerc.conf ~/.config/aerc/aerc.conf
-sed -i 's|^text/html=! html$|text/html=/home/linuxbrew/.linuxbrew/bin/w3m -T text/html -o display_link_number=1|' ~/.config/aerc/aerc.conf
-sed -i 's|^#alternatives=text/plain,text/html$|alternatives=text/html,text/plain|' ~/.config/aerc/aerc.conf
-echo <<EOF > ~/.config/aerc/accounts.conf
+cp "$(brew --prefix)/share/aerc/binds.conf" ~/.config/aerc/binds.conf
+cp "$(brew --prefix)/share/aerc/aerc.conf" ~/.config/aerc/aerc.conf
+
+# Cross-platform sed -i
+if [[ "$(uname)" == "Darwin" ]]; then
+    sedi() { sed -i '' "$@"; }
+else
+    sedi() { sed -i "$@"; }
+fi
+
+sedi "s|^text/html=! html\$|text/html=$(brew --prefix)/bin/w3m -T text/html -o display_link_number=1|" ~/.config/aerc/aerc.conf
+sedi 's|^#alternatives=text/plain,text/html$|alternatives=text/html,text/plain|' ~/.config/aerc/aerc.conf
+
+cat > ~/.config/aerc/accounts.conf << 'EOF'
 [Gmail]
 source        = imaps://shawngmc@gmail.com@imap.gmail.com:993
 outgoing      = smtps+plain://shawngmc@gmail.com@smtp.gmail.com:465
