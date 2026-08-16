@@ -1,6 +1,8 @@
 #!/bin/bash
 
 # Bulk installs
+# Github
+brew install ghq gh 
 # Network
 brew install iftop bandwhich termshark doggo nload
 # Containers
