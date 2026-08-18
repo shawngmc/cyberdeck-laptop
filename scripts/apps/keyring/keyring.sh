@@ -1,13 +1,20 @@
+
 #!/usr/bin/env bash
 #
 # setup-gnome-keyring-sddm-sway.sh
 #
-# Installs gnome-keyring + seahorse and configures PAM (SDDM) so the
-# login keyring auto-starts and auto-unlocks using your login password,
-# for use with Sway + VS Code (or any app needing the Secret Service).
+# Installs gnome-keyring + seahorse and configures:
+#   1. PAM (SDDM) so the login keyring auto-starts and auto-unlocks
+#      using your login password.
+#   2. A systemd environment.d file so SSH_AUTH_SOCK and
+#      GNOME_KEYRING_CONTROL are part of your session environment
+#      before Sway starts, so Sway and everything it spawns inherit
+#      them.
+#   3. VS Code's argv.json, so it uses gnome-libsecret instead of
+#      trying (and failing) to auto-detect a keyring backend on Sway.
 #
-# Safe to re-run: checks for existing lines before adding, and backs up
-# any file it edits.
+# Safe to re-run: checks existing content before changing anything,
+# and backs up any file it edits.
 
 set -euo pipefail
 
@@ -44,9 +51,7 @@ echo "==> 3. Adding PAM auth line (unlocks keyring with login password)"
 if grep -qE "^auth\s.*pam_gnome_keyring\.so" "$PAM_FILE"; then
     echo "    auth line already present, skipping"
 else
-    # Insert after the first 'auth ... include <something-auth>' line
-    # (Fedora's sddm file uses password-auth, others use system-auth).
-    # Fall back to inserting at the top of the file if no such line exists.
+    # Fedora's sddm file uses password-auth; other distros use system-auth.
     if grep -qE "^auth\s+(include|substack)\s+(password|system)-auth" "$PAM_FILE"; then
         sudo sed -i "0,/^auth\s\+\(include\|substack\)\s\+\(password\|system\)-auth/{/^auth\s\+\(include\|substack\)\s\+\(password\|system\)-auth/a ${AUTH_LINE}
         }" "$PAM_FILE"
@@ -96,21 +101,115 @@ else
     echo "    auto-password-matched on your next login. Nothing to do."
 fi
 
-echo "==> 7. Sway config check"
-SWAY_CONFIG="$HOME/.config/sway/config"
-if [[ -f "$SWAY_CONFIG" ]] && grep -q "gnome-keyring-daemon --start" "$SWAY_CONFIG"; then
-    cat <<EOF
+echo "==> 7. Writing environment.d file for the keyring env"
+ENV_D_DIR="$HOME/.config/environment.d"
+ENV_D_FILE="$ENV_D_DIR/60-gnome-keyring.conf"
+mkdir -p "$ENV_D_DIR"
 
-NOTE: Found a manual 'exec gnome-keyring-daemon --start ...' line in:
-    $SWAY_CONFIG
+RUNTIME_DIR="/run/user/$(id -u)"
 
-This is no longer needed since PAM's auto_start now launches the daemon
-before Sway even starts. It's harmless to leave (gnome-keyring-daemon
-handles being invoked twice gracefully), but you can remove that line
-if you want a cleaner config.
-EOF
+if [[ -f "$ENV_D_FILE" ]] && grep -q "^SSH_AUTH_SOCK=${RUNTIME_DIR}/keyring/ssh$" "$ENV_D_FILE"; then
+    echo "    $ENV_D_FILE already correct, skipping"
 else
-    echo "    No conflicting exec line found in Sway config — good."
+    cat > "$ENV_D_FILE" <<EOF
+# Added by setup-gnome-keyring-sddm-sway.sh
+# gnome-keyring's socket paths are deterministic, so they're declared
+# here literally rather than captured dynamically. pam_systemd reads
+# this file at login and injects these into the session environment
+# before Sway is exec'd, so Sway and everything it spawns inherit them.
+SSH_AUTH_SOCK=${RUNTIME_DIR}/keyring/ssh
+GNOME_KEYRING_CONTROL=${RUNTIME_DIR}/keyring
+EOF
+    echo "    Wrote $ENV_D_FILE"
+fi
+
+echo "==> 8. Configuring VS Code to use gnome-libsecret for its keyring"
+CODE_DIRS=(
+    "$HOME/.config/Code"
+    "$HOME/.config/Code - Insiders"
+    "$HOME/.config/VSCodium"
+    "$HOME/.config/Code - OSS"
+)
+
+FOUND_ANY=0
+for dir in "${CODE_DIRS[@]}"; do
+    [[ -d "$dir" ]] || continue
+    FOUND_ANY=1
+    ARGV_JSON="$dir/argv.json"
+    echo "    Found $dir"
+
+    if [[ -f "$ARGV_JSON" ]]; then
+        cp "$ARGV_JSON" "${ARGV_JSON}.bak-${TIMESTAMP}"
+    fi
+
+    python3 - "$ARGV_JSON" <<'PYEOF'
+import re
+import sys
+import pathlib
+
+path = pathlib.Path(sys.argv[1])
+KEY = "password-store"
+VALUE = "gnome-libsecret"
+
+if not path.exists():
+    path.write_text('{\n    "%s": "%s"\n}\n' % (KEY, VALUE))
+    print("    Created %s" % path)
+    sys.exit(0)
+
+text = path.read_text()
+
+# Look for an ACTIVE (non-commented) password-store line.
+m = re.search(
+    r'^(?!\s*//)\s*"%s"\s*:\s*"([^"]*)"\s*,?\s*$' % re.escape(KEY),
+    text, re.MULTILINE,
+)
+if m:
+    if m.group(1) == VALUE:
+        print("    %s already set to %s, skipping" % (KEY, VALUE))
+        sys.exit(0)
+    line = m.group(0)
+    new_line = re.sub(r'"([^"]*)"(\s*,?\s*)$', '"%s"\\2' % VALUE, line)
+    text = text[:m.start()] + new_line + text[m.end():]
+    path.write_text(text)
+    print("    Updated existing %s value" % KEY)
+    sys.exit(0)
+
+# No active key — insert one just before the final closing brace,
+# preserving comments/formatting already in the file.
+close_idx = text.rstrip().rfind('}')
+if close_idx == -1:
+    print("    WARNING: couldn't find a closing brace in %s" % path)
+    print('    Add this manually: "%s": "%s"' % (KEY, VALUE))
+    sys.exit(1)
+
+before, after = text[:close_idx], text[close_idx:]
+lines = before.splitlines(keepends=True)
+
+last_idx = None
+for i in range(len(lines) - 1, -1, -1):
+    stripped = lines[i].strip()
+    if stripped in ('', '{') or stripped.startswith('//'):
+        continue
+    last_idx = i
+    break
+
+if last_idx is not None:
+    stripped = lines[last_idx].rstrip('\n')
+    if not stripped.rstrip().endswith(','):
+        newline = '\n' if lines[last_idx].endswith('\n') else ''
+        lines[last_idx] = stripped.rstrip() + ',' + newline
+
+new_text = ''.join(lines) + '    "%s": "%s"\n' % (KEY, VALUE) + after
+path.write_text(new_text)
+print("    Added %s to %s" % (KEY, path))
+PYEOF
+done
+
+if [[ "$FOUND_ANY" -eq 0 ]]; then
+    echo "    No VS Code config directory found under ~/.config."
+    echo "    If VS Code is installed, add this manually via the Command"
+    echo "    Palette -> 'Preferences: Configure Runtime Arguments':"
+    echo "      \"password-store\": \"gnome-libsecret\""
 fi
 
 cat <<EOF
@@ -118,15 +217,20 @@ cat <<EOF
 ==> Done.
 
 Next steps:
-  1. Log out completely (not just lock the screen).
+  1. Log out completely (not just lock the screen — environment.d is
+     only read at login).
   2. Log back in via SDDM as normal.
   3. Run 'seahorse' and confirm the "Login" keyring shows unlocked
      (no padlock icon).
-  4. Launch VS Code from that same session and confirm it no longer
-     prompts for a keyring password.
+  4. Open a terminal and check:
+       echo \$SSH_AUTH_SOCK
+       env | grep -i GNOME_KEYRING
+  5. Fully quit VS Code (all windows — argv.json is only read at full
+     process start, not on 'Reload Window'), then relaunch it and
+     confirm it no longer prompts about a missing keyring.
 
-If VS Code still prompts, check:
-  echo \$SSH_AUTH_SOCK
-  loginctl show-session \$XDG_SESSION_ID -p Type
-to confirm the session picked up the keyring's D-Bus environment.
+If SSH_AUTH_SOCK is still empty after a fresh login:
+  systemctl --user show-environment | grep -i keyring
+  pgrep -a gnome-keyring-daemon
+  ls -la \$XDG_RUNTIME_DIR/keyring/
 EOF
