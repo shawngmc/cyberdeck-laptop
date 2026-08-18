@@ -1,16 +1,19 @@
-
 #!/usr/bin/env bash
 #
 # setup-gnome-keyring-sddm-sway.sh
 #
-# Installs gnome-keyring + seahorse and configures:
+# Installs gnome-keyring + seahorse + gcr (for gcr-ssh-agent — SSH
+# agent support was removed from gnome-keyring-daemon in v46 and now
+# lives here) and configures:
 #   1. PAM (SDDM) so the login keyring auto-starts and auto-unlocks
 #      using your login password.
-#   2. A systemd environment.d file so SSH_AUTH_SOCK and
-#      GNOME_KEYRING_CONTROL are part of your session environment
-#      before Sway starts, so Sway and everything it spawns inherit
-#      them.
-#   3. VS Code's argv.json, so it uses gnome-libsecret instead of
+#   2. gcr-ssh-agent.socket (systemd --user), which provides the
+#      actual SSH agent.
+#   3. A systemd environment.d file so SSH_AUTH_SOCK (pointing at
+#      gcr-ssh-agent's socket) and GNOME_KEYRING_CONTROL are part of
+#      your session environment before Sway starts, so Sway and
+#      everything it spawns inherit them.
+#   4. VS Code's argv.json, so it uses gnome-libsecret instead of
 #      trying (and failing) to auto-detect a keyring backend on Sway.
 #
 # Safe to re-run: checks existing content before changing anything,
@@ -30,8 +33,8 @@ require_root_for() {
     fi
 }
 
-echo "==> 1. Installing gnome-keyring and seahorse"
-require_root_for dnf install -y gnome-keyring seahorse
+echo "==> 1. Installing gnome-keyring, seahorse, and gcr (gcr-ssh-agent)"
+require_root_for dnf install -y gnome-keyring seahorse gcr
 
 if [[ ! -f "$PAM_FILE" ]]; then
     echo "ERROR: $PAM_FILE does not exist."
@@ -101,29 +104,39 @@ else
     echo "    auto-password-matched on your next login. Nothing to do."
 fi
 
-echo "==> 7. Writing environment.d file for the keyring env"
+echo "==> 7. Enabling gcr-ssh-agent.socket (provides the actual SSH agent)"
+systemctl --user daemon-reload
+if systemctl --user is-enabled gcr-ssh-agent.socket &>/dev/null; then
+    echo "    already enabled"
+else
+    systemctl --user enable --now gcr-ssh-agent.socket
+    echo "    enabled and started"
+fi
+
+echo "==> 8. Writing environment.d file for the keyring env"
 ENV_D_DIR="$HOME/.config/environment.d"
 ENV_D_FILE="$ENV_D_DIR/60-gnome-keyring.conf"
 mkdir -p "$ENV_D_DIR"
 
 RUNTIME_DIR="/run/user/$(id -u)"
 
-if [[ -f "$ENV_D_FILE" ]] && grep -q "^SSH_AUTH_SOCK=${RUNTIME_DIR}/keyring/ssh$" "$ENV_D_FILE"; then
+if [[ -f "$ENV_D_FILE" ]] && grep -q "^SSH_AUTH_SOCK=${RUNTIME_DIR}/gcr/ssh$" "$ENV_D_FILE"; then
     echo "    $ENV_D_FILE already correct, skipping"
 else
     cat > "$ENV_D_FILE" <<EOF
 # Added by setup-gnome-keyring-sddm-sway.sh
-# gnome-keyring's socket paths are deterministic, so they're declared
-# here literally rather than captured dynamically. pam_systemd reads
-# this file at login and injects these into the session environment
-# before Sway is exec'd, so Sway and everything it spawns inherit them.
-SSH_AUTH_SOCK=${RUNTIME_DIR}/keyring/ssh
+# gcr-ssh-agent's and gnome-keyring's socket paths are deterministic,
+# so they're declared here literally rather than captured dynamically.
+# pam_systemd reads this file at login and injects these into the
+# session environment before Sway is exec'd, so Sway and everything
+# it spawns inherit them.
+SSH_AUTH_SOCK=${RUNTIME_DIR}/gcr/ssh
 GNOME_KEYRING_CONTROL=${RUNTIME_DIR}/keyring
 EOF
     echo "    Wrote $ENV_D_FILE"
 fi
 
-echo "==> 8. Configuring VS Code to use gnome-libsecret for its keyring"
+echo "==> 9. Configuring VS Code to use gnome-libsecret for its keyring"
 CODE_DIRS=(
     "$HOME/.config/Code"
     "$HOME/.config/Code - Insiders"
@@ -224,13 +237,18 @@ Next steps:
      (no padlock icon).
   4. Open a terminal and check:
        echo \$SSH_AUTH_SOCK
-       env | grep -i GNOME_KEYRING
-  5. Fully quit VS Code (all windows — argv.json is only read at full
+       systemctl --user status gcr-ssh-agent.socket
+  5. Run 'ssh-add ~/.ssh/id_ed25519' (or whichever key you use) once.
+     You'll get one GUI passphrase prompt — check "Automatically
+     unlock this key whenever I'm logged in" so it's cached in your
+     (now auto-unlocked) login keyring. After this one-time step,
+     git push and VS Code should stop asking for the passphrase.
+  6. Fully quit VS Code (all windows — argv.json is only read at full
      process start, not on 'Reload Window'), then relaunch it and
      confirm it no longer prompts about a missing keyring.
 
 If SSH_AUTH_SOCK is still empty after a fresh login:
   systemctl --user show-environment | grep -i keyring
-  pgrep -a gnome-keyring-daemon
-  ls -la \$XDG_RUNTIME_DIR/keyring/
+  systemctl --user status gcr-ssh-agent.socket
+  ls -la \$XDG_RUNTIME_DIR/gcr/
 EOF
